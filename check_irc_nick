@@ -1,0 +1,80 @@
+#!/usr/bin/env perl
+use v5.12;
+use warnings;
+
+use AnyEvent;
+use AnyEvent::IRC::Client;
+use AnyEvent::Strict;
+use Data::Dump qw(dump);
+use Data::UUID;
+use Nagios::Plugin;
+
+my $np = Nagios::Plugin->new(
+    usage => 'Usage: %s --host HOST --nick NICK',
+    version => '1.0',
+    url => 'https://github.com/mxey/check_irc_nick',
+    blurb => 'Connect to IRC server and check that nick is connected',
+);
+
+$np->add_arg(
+    spec => 'nick|n=s',
+    help => 'Monitored nick',
+    required => 1,
+);
+
+$np->add_arg(
+    spec => 'host|h=s',
+    help => 'IRC host',
+    required => 1,
+);
+
+$np->add_arg(
+    spec => 'port|p=i',
+    help => 'IRC port (default: 6667)',
+    default => 6667,
+);
+
+$np->getopts();
+
+
+my $client = AnyEvent::IRC::Client->new();
+
+if ($np->opts->verbose) {
+    $client->reg_cb(
+        send => sub {
+            my ($client, $ircmsg) = @_;
+            say '--> ' . dump($ircmsg);
+        },
+        read => sub {
+            my ($client, $ircmsg) = @_;
+            say '<-- ' . dump($ircmsg);
+        },
+    );
+}
+
+
+my $timer = AnyEvent->timer(after => $np->opts->timeout, cb => sub {
+    $np->nagios_exit(UNKNOWN, "timed out");
+});
+
+
+my $my_name = 'check_irc_nick_' . substr(Data::UUID->new()->create_str(), 0, 20);
+$client->connect($np->opts->host, $np->opts->port, {
+    nick => $my_name,
+    user => 'check_irc_nick',
+    real => $my_name,
+});
+
+# End of WHOIS
+$client->reg_cb(irc_318 => sub {
+    if (my $ident = $client->nick_ident($np->opts->nick)) {
+        $np->nagios_exit(OK, "Ident info: $ident");
+    }
+    else {
+        $np->nagios_exit(CRITICAL, 'Could not WHOIS ' . $np->opts->nick);
+    }
+});
+
+$client->send_srv(WHOIS => $np->opts->nick);
+
+AnyEvent->condvar()->recv();
