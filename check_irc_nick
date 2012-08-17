@@ -42,11 +42,11 @@ my $client = AnyEvent::IRC::Client->new();
 if ($np->opts->verbose) {
     $client->reg_cb(
         send => sub {
-            my ($client, $ircmsg) = @_;
+            my (undef, $ircmsg) = @_;
             say '--> ' . dump($ircmsg);
         },
         read => sub {
-            my ($client, $ircmsg) = @_;
+            my (undef, $ircmsg) = @_;
             say '<-- ' . dump($ircmsg);
         },
     );
@@ -54,7 +54,7 @@ if ($np->opts->verbose) {
 
 
 my $timer = AnyEvent->timer(after => $np->opts->timeout, cb => sub {
-    $np->nagios_exit(UNKNOWN, "timed out");
+    $np->nagios_exit(UNKNOWN, 'timed out');
 });
 
 
