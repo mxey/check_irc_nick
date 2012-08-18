@@ -54,7 +54,7 @@ $np->add_arg(
 );
 
 $np->add_arg(
-    spec => 'rw-file|f=s',
+    spec => 'cmd-pipe|f=s',
     help => 'Path to icinga commands pipe',
     default => '/var/lib/icinga/rw/icinga.cmd',
 );
@@ -112,7 +112,7 @@ while (1) {
     );
 
     # The command pipe must be closed after each write
-    open(my $fh, '>>', $np->opts->get('rw-file')) or die "could not open command pipe: $!";
+    open(my $fh, '>>', $np->opts->get('cmd-pipe')) or die "could not open command pipe: $!";
     print $fh $out;
     print $out if $np->opts->verbose;
     close($fh) or die "could not close command pipe: $!";
