@@ -36,7 +36,7 @@ $np->add_arg(
 );
 
 $np->add_arg(
-    spec => 'irc_host|H=s',
+    spec => 'irc-host|H=s',
     help => 'IRC host',
     required => 1,
 );
@@ -54,7 +54,7 @@ $np->add_arg(
 );
 
 $np->add_arg(
-    spec => 'rw_file|f=s',
+    spec => 'rw-file|f=s',
     help => 'Path to icinga commands pipe',
     default => '/var/lib/icinga/rw/icinga.cmd',
 );
@@ -77,7 +77,7 @@ if ($np->opts->verbose) {
 }
 
 my $my_name = 'check_irc_nick_' . substr(Data::UUID->new()->create_str(), 0, 20);
-$client->connect($np->opts->irc_host, $np->opts->port, {
+$client->connect($np->opts->get('irc-host'), $np->opts->port, {
     nick => $my_name,
     user => 'check_irc_nick',
     real => $my_name,
@@ -112,7 +112,7 @@ while (1) {
     );
 
     # The command pipe must be closed after each write
-    open(my $fh, '>>', $np->opts->rw_file) or die "could not open command pipe: $!";
+    open(my $fh, '>>', $np->opts->get('rw-file')) or die "could not open command pipe: $!";
     print $fh $out;
     print $out if $np->opts->verbose;
     close($fh) or die "could not close command pipe: $!";
