@@ -4,6 +4,7 @@ use warnings;
 
 use AnyEvent;
 use AnyEvent::IRC::Client;
+use AnyEvent::Handle;
 use AnyEvent::Strict;
 use Data::Dump qw(dump);
 use Data::UUID;
@@ -34,8 +35,13 @@ $np->add_arg(
     default => 6667,
 );
 
-$np->getopts();
+$np->add_arg(
+    spec => 'interval|i=i',
+    help => 'Check interval (in seconds)',
+    default => 300,
+);
 
+$np->getopts();
 
 my $client = AnyEvent::IRC::Client->new();
 
@@ -52,12 +58,6 @@ if ($np->opts->verbose) {
     );
 }
 
-
-my $timer = AnyEvent->timer(after => $np->opts->timeout, cb => sub {
-    $np->nagios_exit(UNKNOWN, 'timed out');
-});
-
-
 my $my_name = 'check_irc_nick_' . substr(Data::UUID->new()->create_str(), 0, 20);
 $client->connect($np->opts->host, $np->opts->port, {
     nick => $my_name,
@@ -65,16 +65,40 @@ $client->connect($np->opts->host, $np->opts->port, {
     real => $my_name,
 });
 
-# End of WHOIS
-$client->reg_cb(irc_318 => sub {
-    if (my $ident = $client->nick_ident($np->opts->nick)) {
-        $np->nagios_exit(OK, "Ident info: $ident");
-    }
-    else {
-        $np->nagios_exit(CRITICAL, 'Could not WHOIS ' . $np->opts->nick);
-    }
-});
+open(my $fh, '>>', 'check_irc_nick.log') or die "could not open command pipe: $!";
 
-$client->send_srv(WHOIS => $np->opts->nick);
+my $hdl = AnyEvent::Handle->new(
+	fh => $fh,
+);
 
-AnyEvent->condvar()->recv();
+while (1) {
+	my $cv = AnyEvent->condvar;
+	
+	my $timeout = AnyEvent->timer(after => $np->opts->timeout, cb => sub {
+		$cv->send(UNKNOWN, 'timed out');
+	});
+
+	# End of WHOIS
+	my $cb_guard = $client->reg_cb(irc_318 => sub {
+	    if (my $ident = $client->nick_ident($np->opts->nick)) {
+	        $cv->send(OK, "Ident info: $ident");
+	    }
+	    else {
+	        $cv->send(CRITICAL, 'Could not WHOIS ' . $np->opts->nick);
+	    }
+	});
+
+	$client->send_srv(WHOIS => $np->opts->nick);
+	
+	my ($ret, $msg) = $cv->recv();
+	$client->unreg_cb($cb_guard);
+	undef $timeout;
+	
+	my $out = "$ret $msg\n";
+	print $out if $np->opts->verbose;
+	$hdl->push_write($out);
+	
+	my $repeat_cv = AnyEvent->condvar;
+	my $repeat = AnyEvent->timer(after => $np->opts->interval, cb => $repeat_cv);
+	$repeat_cv->recv();
+}
