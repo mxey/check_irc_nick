@@ -11,10 +11,22 @@ use Data::UUID;
 use Nagios::Plugin;
 
 my $np = Nagios::Plugin->new(
-    usage => 'Usage: %s --host HOST --nick NICK',
+    usage => 'Usage: %s --host HOST --service SERVICE --irc_host HOST --nick NICK',
     version => '1.0',
     url => 'https://github.com/mxey/check_irc_nick',
     blurb => 'Connect to IRC server and check that nick is connected',
+);
+
+$np->add_arg(
+    spec => 'host|h=s',
+    help => 'name of host running the service',
+    required => 1,
+);
+
+$np->add_arg(
+    spec => 'service|s=s',
+    help => 'monitored service name',
+    required => 1,
 );
 
 $np->add_arg(
@@ -24,7 +36,7 @@ $np->add_arg(
 );
 
 $np->add_arg(
-    spec => 'host|h=s',
+    spec => 'irc_host|H=s',
     help => 'IRC host',
     required => 1,
 );
@@ -39,6 +51,12 @@ $np->add_arg(
     spec => 'interval|i=i',
     help => 'Check interval (in seconds)',
     default => 300,
+);
+
+$np->add_arg(
+    spec => 'rw_file|f=s',
+    help => 'Path to icinga commands pipe',
+    default => '/var/lib/icinga/rw/icinga.cmd',
 );
 
 $np->getopts();
@@ -59,46 +77,47 @@ if ($np->opts->verbose) {
 }
 
 my $my_name = 'check_irc_nick_' . substr(Data::UUID->new()->create_str(), 0, 20);
-$client->connect($np->opts->host, $np->opts->port, {
+$client->connect($np->opts->irc_host, $np->opts->port, {
     nick => $my_name,
     user => 'check_irc_nick',
     real => $my_name,
 });
 
-open(my $fh, '>>', 'check_irc_nick.log') or die "could not open command pipe: $!";
-
-my $hdl = AnyEvent::Handle->new(
-	fh => $fh,
-);
-
 while (1) {
-	my $cv = AnyEvent->condvar;
-	
-	my $timeout = AnyEvent->timer(after => $np->opts->timeout, cb => sub {
-		$cv->send(UNKNOWN, 'timed out');
-	});
+    my $cv = AnyEvent->condvar;
 
-	# End of WHOIS
-	my $cb_guard = $client->reg_cb(irc_318 => sub {
-	    if (my $ident = $client->nick_ident($np->opts->nick)) {
-	        $cv->send(OK, "Ident info: $ident");
-	    }
-	    else {
-	        $cv->send(CRITICAL, 'Could not WHOIS ' . $np->opts->nick);
-	    }
-	});
+    my $timeout = AnyEvent->timer(after => $np->opts->timeout, cb => sub {
+        $cv->send(UNKNOWN, 'timed out');
+    });
 
-	$client->send_srv(WHOIS => $np->opts->nick);
-	
-	my ($ret, $msg) = $cv->recv();
-	$client->unreg_cb($cb_guard);
-	undef $timeout;
-	
-	my $out = "$ret $msg\n";
-	print $out if $np->opts->verbose;
-	$hdl->push_write($out);
-	
-	my $repeat_cv = AnyEvent->condvar;
-	my $repeat = AnyEvent->timer(after => $np->opts->interval, cb => $repeat_cv);
-	$repeat_cv->recv();
+    # End of WHOIS
+    my $cb_guard = $client->reg_cb(irc_318 => sub {
+        if (my $ident = $client->nick_ident($np->opts->nick)) {
+            $cv->send(OK, "Ident info: $ident");
+        }
+        else {
+            $cv->send(CRITICAL, 'Could not WHOIS ' . $np->opts->nick);
+        }
+    });
+
+    $client->send_srv(WHOIS => $np->opts->nick);
+
+    my ($ret, $msg) = $cv->recv();
+    $client->unreg_cb($cb_guard);
+    undef $timeout;
+
+    my $out = sprintf("[%d] PROCESS_SERVICE_CHECK_RESULT;%s;%s;%d;%s\n",
+        time(),
+        $np->opts->host, $np->opts->service, $ret, $msg,
+    );
+
+    # The command pipe must be closed after each write
+    open(my $fh, '>>', $np->opts->rw_file) or die "could not open command pipe: $!";
+    print $fh $out;
+    print $out if $np->opts->verbose;
+    close($fh) or die "could not close command pipe: $!";
+
+    my $repeat_cv = AnyEvent->condvar;
+    my $repeat = AnyEvent->timer(after => $np->opts->interval, cb => $repeat_cv);
+    $repeat_cv->recv();
 }
