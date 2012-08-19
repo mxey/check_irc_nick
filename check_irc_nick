@@ -76,12 +76,36 @@ if ($np->opts->verbose) {
     );
 }
 
-my $my_name = 'check_irc_nick_' . substr(Data::UUID->new()->create_str(), 0, 20);
-$client->connect($np->opts->get('irc-host'), $np->opts->port, {
-    nick => $my_name,
-    user => 'check_irc_nick',
-    real => $my_name,
-});
+# my $my_name = 'check_irc_nick_' . substr(Data::UUID->new()->create_str(), 0, 10);
+my $my_name = 'foo';
+sub connect_irc {
+	say 'Connecting to IRC' if $np->opts->verbose;
+	$client->connect($np->opts->get('irc-host'), $np->opts->port, {
+	    nick => $my_name,
+	    user => $my_name,
+	    real => $my_name,
+	});
+}
+sub retry_connect {
+  	my $w;
+	say 'Sleeping 5 seconds for reconnect' if $np->opts->verbose;
+	$w = AE::timer 5, 0, sub {
+	    undef $w;
+		connect_irc();
+	};
+}
+
+$client->reg_cb(
+	disconnect => \&retry_connect,
+	connect => sub {
+		my (undef, $err) = @_;
+		if ($err) {
+			say "Connection failed: $err" if $np->opts->verbose;
+			retry_connect();
+		}
+	},
+);
+connect_irc();
 
 while (1) {
     my $cv = AnyEvent->condvar;
