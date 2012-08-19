@@ -11,51 +11,52 @@ use Data::UUID;
 use Nagios::Plugin;
 
 my $np = Nagios::Plugin->new(
-    usage => 'Usage: %s --host HOST --service SERVICE --irc_host HOST --nick NICK',
+    usage =>
+      'Usage: %s --host HOST --service SERVICE --irc_host HOST --nick NICK',
     version => '1.0',
-    url => 'https://github.com/mxey/check_irc_nick',
-    blurb => 'Connect to IRC server and check that nick is connected',
+    url     => 'https://github.com/mxey/check_irc_nick',
+    blurb   => 'Connect to IRC server and check that nick is connected',
 );
 
 $np->add_arg(
-    spec => 'host|h=s',
-    help => 'name of host running the service',
+    spec     => 'host|h=s',
+    help     => 'name of host running the service',
     required => 1,
 );
 
 $np->add_arg(
-    spec => 'service|s=s',
-    help => 'monitored service name',
+    spec     => 'service|s=s',
+    help     => 'monitored service name',
     required => 1,
 );
 
 $np->add_arg(
-    spec => 'nick|n=s',
-    help => 'Monitored nick',
+    spec     => 'nick|n=s',
+    help     => 'Monitored nick',
     required => 1,
 );
 
 $np->add_arg(
-    spec => 'irc-host|H=s',
-    help => 'IRC host',
+    spec     => 'irc-host|H=s',
+    help     => 'IRC host',
     required => 1,
 );
 
 $np->add_arg(
-    spec => 'port|p=i',
-    help => 'IRC port (default: 6667)',
+    spec    => 'port|p=i',
+    help    => 'IRC port (default: 6667)',
     default => 6667,
 );
 
 $np->add_arg(
-    spec => 'interval|i=i',
-    help => 'Check interval (in seconds)',
+    spec    => 'interval|i=i',
+    help    => 'Check interval (in seconds)',
     default => 300,
 );
 
 $np->add_arg(
-    spec => 'cmd-pipe|f=s',
-    help => 'Path to icinga commands pipe',
+    spec    => 'cmd-pipe|f=s',
+    help    => 'Path to icinga commands pipe',
     default => '/var/lib/icinga/rw/icinga.cmd',
 );
 
@@ -63,14 +64,14 @@ $np->getopts();
 
 my $client = AnyEvent::IRC::Client->new();
 
-if ($np->opts->verbose) {
+if ( $np->opts->verbose ) {
     $client->reg_cb(
         send => sub {
-            my (undef, $ircmsg) = @_;
+            my ( undef, $ircmsg ) = @_;
             say '--> ' . dump($ircmsg);
         },
         read => sub {
-            my (undef, $ircmsg) = @_;
+            my ( undef, $ircmsg ) = @_;
             say '<-- ' . dump($ircmsg);
         },
     );
@@ -78,70 +79,81 @@ if ($np->opts->verbose) {
 
 # my $my_name = 'check_irc_nick_' . substr(Data::UUID->new()->create_str(), 0, 10);
 my $my_name = 'foo';
+
 sub connect_irc {
-	say 'Connecting to IRC' if $np->opts->verbose;
-	$client->connect($np->opts->get('irc-host'), $np->opts->port, {
-	    nick => $my_name,
-	    user => $my_name,
-	    real => $my_name,
-	});
+    say 'Connecting to IRC' if $np->opts->verbose;
+    $client->connect(
+        $np->opts->get('irc-host'),
+        $np->opts->port,
+        {
+            nick => $my_name,
+            user => $my_name,
+            real => $my_name,
+        }
+    );
 }
+
 sub retry_connect {
-  	my $w;
-	say 'Sleeping 5 seconds for reconnect' if $np->opts->verbose;
-	$w = AE::timer 5, 0, sub {
-	    undef $w;
-		connect_irc();
-	};
+    my $w;
+    say 'Sleeping 5 seconds for reconnect' if $np->opts->verbose;
+    $w = AE::timer 5, 0, sub {
+        undef $w;
+        connect_irc();
+    };
 }
 
 $client->reg_cb(
-	disconnect => \&retry_connect,
-	connect => sub {
-		my (undef, $err) = @_;
-		if ($err) {
-			say "Connection failed: $err" if $np->opts->verbose;
-			retry_connect();
-		}
-	},
+    disconnect => \&retry_connect,
+    connect    => sub {
+        my ( undef, $err ) = @_;
+        if ($err) {
+            say "Connection failed: $err" if $np->opts->verbose;
+            retry_connect();
+        }
+    },
 );
 connect_irc();
 
 while (1) {
     my $cv = AnyEvent->condvar;
 
-    my $timeout = AnyEvent->timer(after => $np->opts->timeout, cb => sub {
-        $cv->send(UNKNOWN, 'timed out');
-    });
+    my $timeout = AnyEvent->timer(
+        after => $np->opts->timeout,
+        cb    => sub {
+            $cv->send( UNKNOWN, 'timed out' );
+        }
+    );
 
     # End of WHOIS
-    my $cb_guard = $client->reg_cb(irc_318 => sub {
-        if (my $ident = $client->nick_ident($np->opts->nick)) {
-            $cv->send(OK, "Ident info: $ident");
+    my $cb_guard = $client->reg_cb(
+        irc_318 => sub {
+            if ( my $ident = $client->nick_ident( $np->opts->nick ) ) {
+                $cv->send( OK, "Ident info: $ident" );
+            }
+            else {
+                $cv->send( CRITICAL, 'Could not WHOIS ' . $np->opts->nick );
+            }
         }
-        else {
-            $cv->send(CRITICAL, 'Could not WHOIS ' . $np->opts->nick);
-        }
-    });
+    );
 
-    $client->send_srv(WHOIS => $np->opts->nick);
+    $client->send_srv( WHOIS => $np->opts->nick );
 
-    my ($ret, $msg) = $cv->recv();
+    my ( $ret, $msg ) = $cv->recv();
     $client->unreg_cb($cb_guard);
     undef $timeout;
 
-    my $out = sprintf("[%d] PROCESS_SERVICE_CHECK_RESULT;%s;%s;%d;%s\n",
-        time(),
-        $np->opts->host, $np->opts->service, $ret, $msg,
-    );
+    my $out = sprintf( "[%d] PROCESS_SERVICE_CHECK_RESULT;%s;%s;%d;%s\n",
+        time(), $np->opts->host, $np->opts->service, $ret, $msg, );
 
     # The command pipe must be closed after each write
-    open(my $fh, '>>', $np->opts->get('cmd-pipe')) or die "could not open command pipe: $!";
+    open( my $fh, '>>', $np->opts->get('cmd-pipe') )
+      or die "could not open command pipe: $!";
     print $fh $out;
     print $out if $np->opts->verbose;
     close($fh) or die "could not close command pipe: $!";
 
     my $repeat_cv = AnyEvent->condvar;
-    my $repeat = AnyEvent->timer(after => $np->opts->interval, cb => $repeat_cv);
+    my $repeat =
+      AnyEvent->timer( after => $np->opts->interval, cb => $repeat_cv );
     $repeat_cv->recv();
 }
